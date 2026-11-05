@@ -95,11 +95,12 @@ class RobotCfg:
     enable_extra_torque: bool = False
     joint_wrench_constraint_joint_names: list[str] = None  # 读取 joint_pos 并施加弹簧关节力矩的关节名
     # 弹簧肌腱模型参数（与 BioLeg custom_env 一致）
-    spring_tendon_l1: float = 0.04816
-    spring_tendon_l2: float = 0.21338
-    spring_tendon_k_default: float = 84860.0
-    spring_tendon_theta30_default: float = math.atan(20/56)-math.atan(8/48)-0.2
-
+    spring_tendon_l1: float = 0.3
+    spring_tendon_l2: float = 0.0535
+    spring_tendon_l3: float  = 0.0855
+    spring_tendon_theta_a0_default: float = math.pi/2
+    spring_tendon_theta_k0_default: float = math.pi/2
+    spring_tendon_k_default: float = 22860.0
 
 @configclass
 class ObsScalesCfg:
@@ -260,8 +261,9 @@ class EventCfg:
         func=mdp.randomize_tendon_parameters_scale,
         mode="startup",
         params={
-            "stiffness_distribution_params": None,
-            "theta30_distribution_params": None,
+            "k_distribution_params": None,
+            "theta_a0_distribution_params": None,
+            "theta_k0_distribution_params": None,
             "operation": "scale",
         },
     )

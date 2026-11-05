@@ -132,8 +132,11 @@ class BaseEnv(DirectRLEnv):
         self.randomized_k = torch.full(
             (self.num_envs,), self.cfg.robot.spring_tendon_k_default, dtype=torch.float, device=self.device
         )
-        self.randomized_theta30 = torch.full(
-            (self.num_envs,), self.cfg.robot.spring_tendon_theta30_default, dtype=torch.float, device=self.device
+        self.randomized_theta_a0 = torch.full(
+            (self.num_envs,), self.cfg.robot.spring_tendon_theta_a0_default, dtype=torch.float, device=self.device
+        )
+        self.randomized_theta_k0 = torch.full(
+            (self.num_envs,), self.cfg.robot.spring_tendon_theta_k0_default, dtype=torch.float, device=self.device
         )
 
     def init_obs_buffer(self):
@@ -212,7 +215,7 @@ class BaseEnv(DirectRLEnv):
         current_critic_obs = torch.cat(
             [current_actor_obs, root_lin_vel * self.obs_scales.lin_vel, feet_contact.float(), feet_contact_force.flatten(1), feet_air_time.flatten(1), feet_height.flatten(1), joint_acc, joint_torque], dim=-1
         )
-        
+
         return current_actor_obs, current_critic_obs
 
 
@@ -242,7 +245,7 @@ class BaseEnv(DirectRLEnv):
         self.reset_terminated[:], self.reset_time_outs[:] = self._get_dones()
         self.reset_buf = self.reset_terminated | self.reset_time_outs
         self.reward_buf = self._get_rewards()
-        
+
         reset_env_ids = self.reset_buf.nonzero(as_tuple=False).squeeze(-1)
         if len(reset_env_ids) > 0:
             self._reset_idx(reset_env_ids)
@@ -252,7 +255,7 @@ class BaseEnv(DirectRLEnv):
         self.obs_buf = self._get_observations()
 
         return self.obs_buf, self.reward_buf, self.reset_terminated, self.reset_time_outs, self.extras
-    
+
     def update_terrain_levels(self, env_ids):
         distance = torch.norm(self.robot.data.root_pos_w[env_ids, :2] - self.scene.env_origins[env_ids, :2], dim=1)
         move_up = distance > self.cfg.scene_context.terrain_generator.size[0] / 2
@@ -283,29 +286,44 @@ class BaseEnv(DirectRLEnv):
         self, angle_ankle: torch.Tensor, angle_knee: torch.Tensor
     ) -> tuple[torch.Tensor, torch.Tensor]:
         """弹簧肌腱模型：由踝/膝关节角计算额外力矩（与 BioLeg custom_env 一致）。"""
-        # MATLAB 抬脚为正，USD/URDF 抬脚为负
-        angle_ankle = -angle_ankle
-        angle_knee = -angle_knee
+        # 理论计算中踝关节方向相反，膝关节一致
+        theta_a = -angle_ankle
+        theta_k = angle_knee
 
+        # 初始参数
         l1 = self.cfg.robot.spring_tendon_l1
         l2 = self.cfg.robot.spring_tendon_l2
+        l3 = self.cfg.robot.spring_tendon_l3
+        theta_a0 = self.randomized_theta_a0
+        theta_k0 = self.randomized_theta_k0
         k = self.randomized_k
-        theta30 = self.randomized_theta30
-        knee_radius = 0.011
-        L30 = torch.sqrt(l1**2 + l2**2 - 2 * l1 * l2 * torch.cos(theta30))
 
-        if k.dim() == 0:
-            k = k.expand(angle_ankle.shape[0])
-        if theta30.dim() == 0:
-            theta30 = theta30.expand(angle_ankle.shape[0])
+        # 初始长度
+        L20 = torch.sqrt(l1**2 + l2**2 - 2*l1*l2*torch.cos(theta_a0))
+        theta_10 = torch.asin(l2/L20*torch.sin(theta_a0))
+        L10 = torch.sqrt(L20**2 + l3**2 - 2*L20*l3*torch.cos(theta_k0 - theta_10))
 
-        theta3 = theta30 + angle_ankle
+        # 弹簧长度
+        L2 = torch.sqrt(l1**2 + l2**2 - 2*l1*l2*torch.cos(theta_a + theta_a0))
+        theta1 = torch.asin(l2/L2*torch.sin(theta_a + theta_a0))
+        L1 = torch.sqrt(L2**2 + l3**2 - 2*L2*l3*torch.cos(theta_k0 - theta_k - theta1))
 
-        tendon_length = torch.sqrt(l1**2 + l2**2 - 2 * l1 * l2 * torch.cos(theta3))
-        tendon_force = (tendon_length - L30 + knee_radius * angle_knee) * k
+        # 中间变量
+        theta2 = torch.acos((L2**2+l2**2-l1**2)/(2*L2*l2))
+        theta3 = torch.acos((L1**2+L2**2-l3**2)/(2*L1*L2))
+
+        # 弹簧力计算
+        tendon_length = L1 - L10
+        tendon_force = tendon_length * k
         tendon_force = torch.clamp(tendon_force, min=0.0)
-        torque_knee = knee_radius * tendon_force
-        torque_ankle = (l1 * l2 * torch.sin(torch.pi - theta3) / tendon_length) * tendon_force
+
+        # 力臂
+        arm_knee = l3
+        arm_ankle = l2*torch.sin(theta2 + theta3)
+
+        # 力矩
+        torque_knee = arm_knee * tendon_force
+        torque_ankle = arm_ankle * tendon_force
         return torque_ankle, torque_knee
 
     def _compute_joint_wrench_torques(self) -> torch.Tensor:
@@ -372,10 +390,10 @@ class BaseEnv(DirectRLEnv):
 
         observations = {"policy": actor_obs, "critic":critic_obs}
         return observations
-    
+
     def _get_rewards(self):
         return self.reward_manager.compute(dt=self.step_dt)
-    
+
     def _get_dones(self):
         net_contact_forces = self.contact_sensor.data.net_forces_w_history
         if self.cfg.robot.terminate_contacts_body_names is not None:
@@ -400,7 +418,7 @@ class BaseEnv(DirectRLEnv):
     def _reset_idx(self, env_ids: Sequence[int] | None):
         if len(env_ids) == 0:
             return
-        
+
         if self.cfg.scene_context.height_scanner.enable_height_scan:
             self.height_scanner.reset(env_ids)
 

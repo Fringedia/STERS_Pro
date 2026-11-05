@@ -18,43 +18,34 @@ if TYPE_CHECKING:
 def randomize_tendon_parameters_scale(
     env: "BaseEnv",
     env_ids: torch.Tensor | None,
-    stiffness_distribution_params: tuple[float, float] | None = None,
-    theta30_distribution_params: tuple[float, float] | None = None,
+    k_distribution_params: tuple[float, float] | None = None,
+    theta_a0_distribution_params: tuple[float, float] | None = None,
+    theta_k0_distribution_params: tuple[float, float] | None = None,
     operation: Literal["add", "scale", "abs"] = "scale",
     distribution: Literal["uniform", "log_uniform", "gaussian"] = "uniform",
 ):
-    """域随机化弹簧肌腱参数 k 与 theta30，写入 env.randomized_k / env.randomized_theta30。"""
+    """域随机化 k、theta_a0 和 theta_k0，写入对应的逐环境 buffer。"""
     if not getattr(env, "use_extra_torque", False):
-        return
-    if stiffness_distribution_params is None and theta30_distribution_params is None:
         return
 
     if env_ids is None:
         env_ids = torch.arange(env.num_envs, device=env.device)
 
-    k_default = env.cfg.robot.spring_tendon_k_default
-    theta30_default = env.cfg.robot.spring_tendon_theta30_default
-
-    if stiffness_distribution_params is not None:
-        k_values = torch.full((env.num_envs, 1), k_default, device=env.device)
-        k_values = _randomize_prop_by_op(
-            k_values,
-            stiffness_distribution_params,
+    for name, params in (
+        ("k", k_distribution_params),
+        ("theta_a0", theta_a0_distribution_params),
+        ("theta_k0", theta_k0_distribution_params),
+    ):
+        if params is None:
+            continue
+        default = getattr(env.cfg.robot, f"spring_tendon_{name}_default")
+        values = torch.full((env.num_envs, 1), default, device=env.device)
+        values = _randomize_prop_by_op(
+            values,
+            params,
             env_ids,
             slice(None),
             operation=operation,
             distribution=distribution,
         )
-        env.randomized_k[env_ids] = k_values[env_ids].squeeze(-1)
-
-    if theta30_distribution_params is not None:
-        theta30_values = torch.full((env.num_envs, 1), theta30_default, device=env.device)
-        theta30_values = _randomize_prop_by_op(
-            theta30_values,
-            theta30_distribution_params,
-            env_ids,
-            slice(None),
-            operation=operation,
-            distribution=distribution,
-        )
-        env.randomized_theta30[env_ids] = theta30_values[env_ids].squeeze(-1)
+        getattr(env, f"randomized_{name}")[env_ids] = values[env_ids].squeeze(-1)

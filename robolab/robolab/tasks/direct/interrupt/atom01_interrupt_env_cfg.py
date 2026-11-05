@@ -285,8 +285,9 @@ class ATOM01InterruptEnvCfg(BaseEnvCfg):
         self.noise.noise_scales.joint_pos = 0.03
         self.robot.enable_extra_torque = True
         if self.robot.enable_extra_torque:
-            self.events.randomize_tendon_parameters.params["stiffness_distribution_params"] = (0.95, 1.05)
-            self.events.randomize_tendon_parameters.params["theta30_distribution_params"] = (0.9, 1.1)
+            self.events.randomize_tendon_parameters.params["k_distribution_params"] = (0.95, 1.05)
+            self.events.randomize_tendon_parameters.params["theta_a0_distribution_params"] = (0.9, 1.1)
+            self.events.randomize_tendon_parameters.params["theta_k0_distribution_params"] = (0.9, 1.1)
             self.robot.joint_wrench_constraint_joint_names = [
                 "left_ankle_pitch_joint",
                 "right_ankle_pitch_joint",
