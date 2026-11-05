@@ -33,4 +33,5 @@
 
 from isaaclab.envs.mdp import *
 
+from .events import randomize_tendon_parameters_scale
 from .rewards import *

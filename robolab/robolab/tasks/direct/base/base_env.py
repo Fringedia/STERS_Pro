@@ -107,7 +107,34 @@ class BaseEnv(DirectRLEnv):
         self.obs_scales = self.cfg.normalization.obs_scales
         self.add_noise = self.cfg.noise.add_noise
 
+        self.init_joint_wrench_constraints()
         self.init_obs_buffer()
+
+    def init_joint_wrench_constraints(self):
+        """缓存弹簧肌腱关节索引，并初始化域随机化参数 buffer。
+
+        额外力矩由弹簧肌腱模型计算（见 _calculate_spring_torque），作为关节广义力叠加到
+        PD 电机力矩之后写入 PhysX（不受电机限幅与执行器延迟）。
+        """
+        self.use_extra_torque = self.cfg.robot.enable_extra_torque
+        if not self.use_extra_torque:
+            return
+
+        joint_names = self.cfg.robot.joint_wrench_constraint_joint_names
+        if not joint_names:
+            raise RuntimeError("Joint spring torques are enabled but joint_wrench_constraint_joint_names is empty.")
+
+        self.joint_wrench_joint_ids = self.robot.find_joints(joint_names, preserve_order=True)[0]
+        self.joint_wrench_torques = torch.zeros(
+            self.num_envs, len(self.joint_wrench_joint_ids), dtype=torch.float, device=self.device
+        )
+        # 域随机化参数，由 events.randomize_tendon_parameters 在 startup 时写入
+        self.randomized_k = torch.full(
+            (self.num_envs,), self.cfg.robot.spring_tendon_k_default, dtype=torch.float, device=self.device
+        )
+        self.randomized_theta30 = torch.full(
+            (self.num_envs,), self.cfg.robot.spring_tendon_theta30_default, dtype=torch.float, device=self.device
+        )
 
     def init_obs_buffer(self):
         if self.add_noise:
@@ -200,6 +227,7 @@ class BaseEnv(DirectRLEnv):
             self._sim_step_counter += 1
             self._apply_action()
             self.scene.write_data_to_sim()
+            self._apply_joint_wrench_constraints()
             self.sim.step(render=False)
             if self._sim_step_counter % self.cfg.sim.render_interval == 0 and is_rendering:
                 self.sim.render()
@@ -250,6 +278,69 @@ class BaseEnv(DirectRLEnv):
 
     def _apply_action(self) -> None:
         self.robot.set_joint_position_target(self.actions)
+
+    def _calculate_spring_torque(
+        self, angle_ankle: torch.Tensor, angle_knee: torch.Tensor
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """弹簧肌腱模型：由踝/膝关节角计算额外力矩（与 BioLeg custom_env 一致）。"""
+        # MATLAB 抬脚为正，USD/URDF 抬脚为负
+        angle_ankle = -angle_ankle
+        angle_knee = -angle_knee
+
+        l1 = self.cfg.robot.spring_tendon_l1
+        l2 = self.cfg.robot.spring_tendon_l2
+        k = self.randomized_k
+        theta30 = self.randomized_theta30
+        knee_radius = 0.011
+        L30 = torch.sqrt(l1**2 + l2**2 - 2 * l1 * l2 * torch.cos(theta30))
+
+        if k.dim() == 0:
+            k = k.expand(angle_ankle.shape[0])
+        if theta30.dim() == 0:
+            theta30 = theta30.expand(angle_ankle.shape[0])
+
+        theta3 = theta30 + angle_ankle
+
+        tendon_length = torch.sqrt(l1**2 + l2**2 - 2 * l1 * l2 * torch.cos(theta3))
+        tendon_force = (tendon_length - L30 + knee_radius * angle_knee) * k
+        tendon_force = torch.clamp(tendon_force, min=0.0)
+        torque_knee = knee_radius * tendon_force
+        torque_ankle = (l1 * l2 * torch.sin(torch.pi - theta3) / tendon_length) * tendon_force
+        return torque_ankle, torque_knee
+
+    def _compute_joint_wrench_torques(self) -> torch.Tensor:
+        """计算四个约束关节的标量额外力矩，顺序与 joint_wrench_constraint_joint_names 一致。"""
+        joint_pos = self.robot.data.joint_pos[:, self.joint_wrench_joint_ids]
+        left_ankle = joint_pos[:, 0]
+        right_ankle = joint_pos[:, 1]
+        left_knee = joint_pos[:, 2]
+        right_knee = joint_pos[:, 3]
+
+        left_torque_ankle, left_torque_knee = self._calculate_spring_torque(left_ankle, left_knee)
+        right_torque_ankle, right_torque_knee = self._calculate_spring_torque(right_ankle, right_knee)
+        return torch.stack(
+            [left_torque_ankle, right_torque_ankle, left_torque_knee, right_torque_knee],
+            dim=1,
+        )
+
+    def _apply_joint_wrench_constraints(self) -> None:
+        """将弹簧肌腱标量力矩作为关节广义力叠加到 PD 力矩之后。
+
+        必须在 ``scene.write_data_to_sim()`` 之后调用：此时 PD 力矩已写入
+        ``_joint_effort_target_sim``。弹簧力矩直接加在对应 DOF 上，等价于关节驱动
+        通道上的额外 effort，且不再经 DelayedPD 限幅/延迟（与真机物理弹簧一致）。
+        """
+        if not self.use_extra_torque:
+            return
+
+        self.joint_wrench_torques[:] = self._compute_joint_wrench_torques()
+        joint_ids = self.joint_wrench_joint_ids
+        self.robot._joint_effort_target_sim[:, joint_ids] += self.joint_wrench_torques
+        # 与 critic 观测中的 applied_torque 保持一致
+        self.robot.data.applied_torque[:, joint_ids] += self.joint_wrench_torques
+        self.robot.root_physx_view.set_dof_actuation_forces(
+            self.robot._joint_effort_target_sim, self.robot._ALL_INDICES
+        )
 
     def _get_observations(self):
         current_actor_obs, current_critic_obs = self.compute_current_observations()
@@ -336,6 +427,8 @@ class BaseEnv(DirectRLEnv):
         self.actor_obs_buffer.reset(env_ids)
         self.critic_obs_buffer.reset(env_ids)
         self.action_buffer.reset(env_ids)
+        if self.use_extra_torque:
+            self.joint_wrench_torques[env_ids] = 0.0
         self.episode_length_buf[env_ids] = 0
 
         self.scene.write_data_to_sim()

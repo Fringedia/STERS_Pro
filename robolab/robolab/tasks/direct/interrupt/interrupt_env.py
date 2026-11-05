@@ -200,6 +200,8 @@ class InterruptEnv(BaseEnv):
         self.actor_obs_buffer.reset(env_ids)
         self.critic_obs_buffer.reset(env_ids)
         self.action_buffer.reset(env_ids)
+        if self.use_extra_torque:
+            self.joint_wrench_torques[env_ids] = 0.0
         self.episode_length_buf[env_ids] = 0
 
         self.scene.write_data_to_sim()
@@ -216,6 +218,7 @@ class InterruptEnv(BaseEnv):
             self._sim_step_counter += 1
             self._apply_action()
             self.scene.write_data_to_sim()
+            self._apply_joint_wrench_constraints()
             self.sim.step(render=False)
             if self._sim_step_counter % self.cfg.sim.render_interval == 0 and is_rendering:
                 self.sim.render()

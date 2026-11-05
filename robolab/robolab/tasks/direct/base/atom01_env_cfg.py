@@ -217,3 +217,14 @@ class ATOM01RoughEnvCfg(ATOM01FlatEnvCfg):
         self.sim.physx.gpu_collision_stack_size = 2**29
         self.reward.ang_vel_xy_l2.weight = -0.05
         self.reward.lin_vel_z_l2.weight = -0.05
+        self.robot.enable_extra_torque = True
+        if self.robot.enable_extra_torque:
+            self.events.randomize_tendon_parameters.params["stiffness_distribution_params"] = (0.95, 1.05)
+            self.events.randomize_tendon_parameters.params["theta30_distribution_params"] = (0.9, 1.1)
+            # 弹簧额外力矩按 joint DOF 施加（与 PD 力矩叠加，不受电机限幅）
+            self.robot.joint_wrench_constraint_joint_names = [
+                "left_ankle_pitch_joint",
+                "right_ankle_pitch_joint",
+                "left_knee_joint",
+                "right_knee_joint",
+            ]
