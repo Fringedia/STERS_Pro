@@ -87,6 +87,7 @@ class InterruptEnv(BaseEnv):
             self.interrupt_vis = VisualizationMarkers(self.cfg.interrupt_vis)
             self.interrupt_vis.set_visibility(True)
         
+        self.init_joint_wrench_constraints()
         self.init_obs_buffer()
 
     def compute_current_observations(self):
