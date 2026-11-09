@@ -31,6 +31,7 @@
 
 from __future__ import annotations
 
+import math
 import numpy as np
 import torch
 from collections.abc import Sequence
@@ -298,10 +299,10 @@ class BaseEnv(DirectRLEnv):
         theta_k0 = self.randomized_theta_k0
         k = self.randomized_k
 
-        # 初始长度
-        L20 = torch.sqrt(l1**2 + l2**2 - 2*l1*l2*torch.cos(theta_a0))
-        theta_10 = torch.asin(l2/L20*torch.sin(theta_a0))
-        L10 = torch.sqrt(L20**2 + l3**2 - 2*L20*l3*torch.cos(theta_k0 - theta_10))
+        # 初始长度        
+        L20 = torch.sqrt(l1**2 + l2**2 - 2*l1*l2*torch.cos(theta_a0 + 10/180*math.pi))
+        theta_10 = torch.asin(l2/L20*torch.sin(theta_a0 + 10/180*math.pi))
+        L10 = torch.sqrt(L20**2 + l3**2 - 2*L20*l3*torch.cos(theta_k0 - 12/180*math.pi - theta_10))
 
         # 弹簧长度
         L2 = torch.sqrt(l1**2 + l2**2 - 2*l1*l2*torch.cos(theta_a + theta_a0))
