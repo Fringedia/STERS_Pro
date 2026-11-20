@@ -114,12 +114,18 @@ class BaseEnv(DirectRLEnv):
     def init_joint_wrench_constraints(self):
         """缓存弹簧肌腱关节索引，并初始化域随机化参数 buffer。
 
-        额外力矩由弹簧肌腱模型计算（见 _calculate_spring_torque），作为关节广义力叠加到
+        额外力矩由 spring_tendon_mode 选择的弹簧肌腱模型计算，作为关节广义力叠加到
         PD 电机力矩之后写入 PhysX（不受电机限幅与执行器延迟）。
         """
         self.use_extra_torque = self.cfg.robot.enable_extra_torque
         if not self.use_extra_torque:
             return
+
+        if self.cfg.robot.spring_tendon_mode not in ("knee_ankle", "ankle_only"):
+            raise ValueError(
+                f"Unsupported spring_tendon_mode: {self.cfg.robot.spring_tendon_mode!r}. "
+                "Expected 'knee_ankle' or 'ankle_only'."
+            )
 
         joint_names = self.cfg.robot.joint_wrench_constraint_joint_names
         if not joint_names:
@@ -329,8 +335,8 @@ class BaseEnv(DirectRLEnv):
     
     def _calculate_spring_torque_ankle_only(
         self, angle_ankle: torch.Tensor
-    ) -> tuple[torch.Tensor, torch.Tensor]:
-        """弹簧肌腱模型：由踝/趾关节角计算额外力矩（与 BioLeg custom_env 一致）。"""
+    ) -> torch.Tensor:
+        """弹簧肌腱模型：仅由踝关节角计算踝关节额外力矩。"""
         # MATLAB 抬脚为正，USD/URDF 抬脚为负
         theta_a = -angle_ankle
 
@@ -353,15 +359,20 @@ class BaseEnv(DirectRLEnv):
         return torque_ankle
 
     def _compute_joint_wrench_torques(self) -> torch.Tensor:
-        """计算四个约束关节的标量额外力矩，顺序与 joint_wrench_constraint_joint_names 一致。"""
+        """按左踝、右踝、左膝、右膝顺序计算额外力矩；仅踝模式的膝力矩为零。"""
         joint_pos = self.robot.data.joint_pos[:, self.joint_wrench_joint_ids]
         left_ankle = joint_pos[:, 0]
         right_ankle = joint_pos[:, 1]
-        left_knee = joint_pos[:, 2]
-        right_knee = joint_pos[:, 3]
-
-        left_torque_ankle, left_torque_knee = self._calculate_spring_torque(left_ankle, left_knee)
-        right_torque_ankle, right_torque_knee = self._calculate_spring_torque(right_ankle, right_knee)
+        if self.cfg.robot.spring_tendon_mode == "ankle_only":
+            left_torque_ankle = self._calculate_spring_torque_ankle_only(left_ankle)
+            right_torque_ankle = self._calculate_spring_torque_ankle_only(right_ankle)
+            left_torque_knee = torch.zeros_like(left_torque_ankle)
+            right_torque_knee = torch.zeros_like(right_torque_ankle)
+        else:
+            left_knee = joint_pos[:, 2]
+            right_knee = joint_pos[:, 3]
+            left_torque_ankle, left_torque_knee = self._calculate_spring_torque_knee_ankle(left_ankle, left_knee)
+            right_torque_ankle, right_torque_knee = self._calculate_spring_torque_knee_ankle(right_ankle, right_knee)
         return torch.stack(
             [left_torque_ankle, right_torque_ankle, left_torque_knee, right_torque_knee],
             dim=1,

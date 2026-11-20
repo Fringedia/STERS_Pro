@@ -93,6 +93,7 @@ class RobotCfg:
 
     # 总开关：弹簧肌腱额外关节力矩与域随机化（关闭时不施加额外力矩）
     enable_extra_torque: bool = False
+    spring_tendon_mode: str = "knee_ankle"  # "knee_ankle"：踝膝联动；"ankle_only"：仅踝关节
     joint_wrench_constraint_joint_names: list[str] = None  # 读取 joint_pos 并施加弹簧关节力矩的关节名
     # 弹簧肌腱模型参数（与 BioLeg custom_env 一致）
     spring_tendon_l1: float = 0.3

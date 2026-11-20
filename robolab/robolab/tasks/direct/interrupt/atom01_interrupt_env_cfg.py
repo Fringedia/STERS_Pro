@@ -284,6 +284,7 @@ class ATOM01InterruptEnvCfg(BaseEnvCfg):
         self.noise.noise_scales.joint_vel = 1.75
         self.noise.noise_scales.joint_pos = 0.03
         self.robot.enable_extra_torque = True
+        self.robot.spring_tendon_mode = "knee_ankle"   # "knee_ankle"：踝膝联动；"ankle_only"：仅踝关节
         if self.robot.enable_extra_torque:
             self.events.randomize_tendon_parameters.params["k_distribution_params"] = (0.95, 1.05)
             self.events.randomize_tendon_parameters.params["theta_a0_distribution_params"] = (0.9, 1.1)
