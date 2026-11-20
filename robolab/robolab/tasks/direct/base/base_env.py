@@ -283,7 +283,7 @@ class BaseEnv(DirectRLEnv):
     def _apply_action(self) -> None:
         self.robot.set_joint_position_target(self.actions)
 
-    def _calculate_spring_torque(
+    def _calculate_spring_torque_knee_ankle(
         self, angle_ankle: torch.Tensor, angle_knee: torch.Tensor
     ) -> tuple[torch.Tensor, torch.Tensor]:
         """弹簧肌腱模型：由踝/膝关节角计算额外力矩（与 BioLeg custom_env 一致）。"""
@@ -326,6 +326,31 @@ class BaseEnv(DirectRLEnv):
         torque_knee = arm_knee * tendon_force
         torque_ankle = arm_ankle * tendon_force
         return torque_ankle, torque_knee
+    
+    def _calculate_spring_torque_ankle_only(
+        self, angle_ankle: torch.Tensor
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """弹簧肌腱模型：由踝/趾关节角计算额外力矩（与 BioLeg custom_env 一致）。"""
+        # MATLAB 抬脚为正，USD/URDF 抬脚为负
+        theta_a = -angle_ankle
+
+        # 初始参数    
+        l1_ankle_only = self.cfg.robot.spring_tendon_l1_ankle_only
+        l2 = self.cfg.robot.spring_tendon_l2
+        k = self.randomized_k
+        theta_a0 = self.randomized_theta_a0
+        
+        # 初始长度
+        L20 = torch.sqrt(l1_ankle_only**2 + l2**2 - 2 * l1_ankle_only * l2 * torch.cos(theta_a0 + 10/180*math.pi))
+
+        #小腿-脚跟夹角
+        theta3 = theta_a0 + theta_a
+
+        tendon_length = torch.sqrt(l1_ankle_only**2 + l2**2 - 2 * l1_ankle_only * l2 * torch.cos(theta3))
+        tendon_force = (tendon_length - L20) * k
+        tendon_force = torch.clamp(tendon_force, min=0.0)
+        torque_ankle = (l1_ankle_only * l2 * torch.sin(torch.pi - theta3) / tendon_length) * tendon_force
+        return torque_ankle
 
     def _compute_joint_wrench_torques(self) -> torch.Tensor:
         """计算四个约束关节的标量额外力矩，顺序与 joint_wrench_constraint_joint_names 一致。"""

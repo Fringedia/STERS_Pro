@@ -101,6 +101,8 @@ class RobotCfg:
     spring_tendon_theta_a0_default: float = math.pi/2
     spring_tendon_theta_k0_default: float = math.pi/2
     spring_tendon_k_default: float = 22860.0
+    
+    spring_tendon_l1_ankle_only: float = 0.21338
 
 @configclass
 class ObsScalesCfg:
